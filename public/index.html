@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>Seki</title>
+		<meta name="description" content="Private paste service" />
+		<link rel="icon" href="/assets/img/favicon.svg" type="image/svg+xml" />
+		<link rel="preconnect" href="https://fonts.googleapis.com" />
+		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+		<link
+			href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Open+Sans:wght@400;500;600;700&display=swap"
+			rel="stylesheet"
+		/>
+		<link rel="stylesheet" href="/assets/css/styles.css" />
+	</head>
+	<body>
+		<section class="auth-shell" id="auth-view" aria-labelledby="auth-title" hidden>
+			<div class="auth-panel">
+				<div class="brand-stack">
+					<img src="/assets/img/favicon.svg" alt="" class="brand-mark" />
+					<div>
+						<p class="brand-kicker">Private pastes</p>
+						<h1 id="auth-title">Seki</h1>
+					</div>
+				</div>
+
+				<form class="auth-form" id="auth-form" novalidate>
+					<div class="field-group">
+						<label for="token-input">API token</label>
+						<input
+							id="token-input"
+							name="token"
+							type="password"
+							autocomplete="current-password"
+							placeholder="Enter your token"
+							required
+						/>
+					</div>
+					<button class="button button-primary" id="auth-submit" type="submit">Unlock</button>
+					<p class="message message-error" id="auth-error" role="alert"></p>
+				</form>
+			</div>
+		</section>
+
+		<main class="workspace" id="workspace" hidden>
+			<section class="editor-view" id="editor-view" aria-label="New paste editor" hidden>
+				<textarea
+					class="editor-textarea"
+					id="editor-input"
+					spellcheck="false"
+					autocomplete="off"
+					placeholder="Paste text here"
+				></textarea>
+			</section>
+
+			<section class="viewer-view" id="viewer-view" aria-label="Paste viewer" hidden>
+				<div class="code-frame" id="code-frame">
+					<pre class="line-numbers" id="line-numbers" aria-hidden="true"></pre>
+					<pre class="code-pre"><code class="code-output" id="code-output"></code></pre>
+				</div>
+				<article class="markdown-frame" id="markdown-frame" hidden></article>
+			</section>
+
+			<nav class="toolbar" id="toolbar" aria-label="Paste actions">
+				<button class="tool-button" id="save-button" type="button" title="Save" aria-label="Save">
+					<svg viewBox="0 0 24 24" aria-hidden="true">
+						<path d="M5 4h11l3 3v13H5z" />
+						<path d="M8 4v5h8" />
+						<path d="M8 16h8" />
+					</svg>
+				</button>
+				<button class="tool-button" id="new-button" type="button" title="New" aria-label="New">
+					<svg viewBox="0 0 24 24" aria-hidden="true">
+						<path d="M6 4h8l4 4v12H6z" />
+						<path d="M14 4v5h4" />
+						<path d="M12 12v5" />
+						<path d="M9.5 14.5h5" />
+					</svg>
+				</button>
+				<button class="tool-button" id="duplicate-button" type="button" title="Duplicate" aria-label="Duplicate">
+					<svg viewBox="0 0 24 24" aria-hidden="true">
+						<path d="M8 8h10v12H8z" />
+						<path d="M6 16H4V4h10v2" />
+					</svg>
+				</button>
+				<button class="tool-button" id="raw-button" type="button" title="Raw" aria-label="Raw">
+					<svg viewBox="0 0 24 24" aria-hidden="true">
+						<path d="M7 4h10v16H7z" />
+						<path d="M10 9h4" />
+						<path d="M10 13h4" />
+						<path d="M10 17h3" />
+					</svg>
+				</button>
+				<button class="tool-button" id="copy-button" type="button" title="Copy link" aria-label="Copy link">
+					<svg viewBox="0 0 24 24" aria-hidden="true">
+						<path d="M9.5 14.5l5-5" />
+						<path d="M12.5 6.5l1.2-1.2a4 4 0 0 1 5.7 5.7l-1.8 1.8a4 4 0 0 1-5.7 0" />
+						<path d="M11.5 17.5l-1.2 1.2a4 4 0 0 1-5.7-5.7l1.8-1.8a4 4 0 0 1 5.7 0" />
+					</svg>
+				</button>
+				<button class="tool-button" id="rename-button" type="button" title="Rename link" aria-label="Rename link">
+					<svg viewBox="0 0 24 24" aria-hidden="true">
+						<path d="M4 20h4l10.5-10.5a2.1 2.1 0 0 0-3-3L5 17z" />
+						<path d="M13.5 8.5l3 3" />
+					</svg>
+				</button>
+				<button class="tool-button tool-danger" id="delete-button" type="button" title="Delete" aria-label="Delete">
+					<svg viewBox="0 0 24 24" aria-hidden="true">
+						<path d="M6 7h12" />
+						<path d="M9 7V5h6v2" />
+						<path d="M8 10l.7 9h6.6l.7-9" />
+						<path d="M11 11v5" />
+						<path d="M13 11v5" />
+					</svg>
+				</button>
+				<button class="tool-button" id="sign-out-button" type="button" title="Sign out" aria-label="Sign out">
+					<svg viewBox="0 0 24 24" aria-hidden="true">
+						<path d="M10 5H5v14h5" />
+						<path d="M14 8l4 4-4 4" />
+						<path d="M18 12H9" />
+					</svg>
+				</button>
+			</nav>
+
+			<div class="meta-strip" id="meta-strip" hidden>
+				<span id="id-meta">paste</span>
+				<span id="language-meta">Plain text</span>
+				<span id="views-meta">0 views</span>
+				<span id="size-meta">0 B</span>
+			</div>
+		</main>
+
+		<div class="toast" id="toast" role="status" aria-live="polite"></div>
+		<script src="/assets/js/app.js" defer></script>
+	</body>
+</html>

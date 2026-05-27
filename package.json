@@ -1,0 +1,16 @@
+{
+	"name": "seki",
+	"version": "1.0.0",
+	"author": "FrostyDeFreeze",
+	"description": "Private paste service",
+	"main": "server.js",
+	"scripts": {
+		"start": "node server.js"
+	},
+	"dependencies": {
+		"dotenv": "^17.4.2",
+		"express": "^5.2.1",
+		"highlight.js": "^11.11.1",
+		"markdown-it": "^14.2.0"
+	}
+}
