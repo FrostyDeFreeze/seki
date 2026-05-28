@@ -1,9 +1,10 @@
-# Seki
+# <p style="text-align: center;">Seki</p>
 
 Private paste service on Node.js and Express
 
 ![Auth](./docs/screenshots/auth.png)
-![App](./docs/screenshots/app.png)
+![Code](./docs/screenshots/code.png)
+![Markdown](./docs/screenshots/markdown.png)
 
 ## Purpose
 
@@ -12,15 +13,14 @@ Seki stores text pastes as plain text files and serves them through short links.
 ## Features
 
 - Private writes and public reads: creating, deleting, and renaming require a token, viewing works by link
-- Short paste links with configurable id length
 - No database: metadata is stored in `data/index.json`, paste content in `data/pastes/`
 - Raw text view at `/:id/raw`
 - Automatic language detection and syntax highlighting with `highlight.js`
 - Markdown pastes render as HTML in the viewer and stay plain text in raw mode
 - Large pastes skip expensive highlighting and stay readable as plain text
-- Link renaming through API/UI: `/:id` can become a custom slug
+- Open Graph/Twitter metadata
+- Link renaming through API/UI
 - View counter
-- Paste deletion through `DELETE`
 - Configurable paste size limit
 - Atomic index writes through temp file + rename
 
@@ -29,7 +29,9 @@ Seki stores text pastes as plain text files and serves them through short links.
 Requires Node.js 18+
 
 ```bash
-npm install
+git clone https://github.com/FrostyDeFreeze/seki
+cd seki
+npm i
 cp .env.example .env
 npm start
 ```
@@ -42,8 +44,8 @@ BASE_URL=http://localhost:7250
 API_TOKEN=super-secret-token
 
 PASTE_CODE_LENGTH=3
-PASTE_MAX_SIZE=1048576
-HIGHLIGHT_MAX_SIZE=262144
+PASTE_MAX_SIZE=1048576 # in bytes
+HIGHLIGHT_MAX_SIZE=262144 # in bytes
 
 DATA_DIR=./data
 ```
@@ -74,87 +76,14 @@ API errors use this format:
 }
 ```
 
-### `POST /auth/verify`
+| Method   | Endpoint          | Access  | Description                                                              | Body                                    | Response                                                                    |
+| -------- | ----------------- | ------- | ------------------------------------------------------------------------ | --------------------------------------- | --------------------------------------------------------------------------- |
+| `POST`   | `/auth/verify`    | Private | Checks that the token is valid                                           | -                                       | `{ "ok": true }`                                                            |
+| `POST`   | `/api/pastes`     | Private | Creates a paste                                                          | `{ "content": "console.log('hello')" }` | `201` with `{ "success": true, "data": Paste }`                             |
+| `GET`    | `/api/pastes/:id` | Public  | Returns a paste and increments its view counter                          | -                                       | `{ "success": true, "data": Paste }`                                        |
+| `PATCH`  | `/api/pastes/:id` | Private | Renames a paste id and changes its short link                            | `{ "id": "release-notes" }`             | `{ "success": true, "data": Paste }` with updated `id`, `url`, and `rawUrl` |
+| `DELETE` | `/api/pastes/:id` | Private | Deletes a paste from the index and removes its file from disk            | -                                       | `{ "success": true, "data": ... }` with the deleted paste metadata          |
+| `GET`    | `/:id`            | Public  | Opens the HTML paste viewer                                              | -                                       | HTML                                                                        |
+| `GET`    | `/:id/raw`        | Public  | Returns the original paste as plain text and increments its view counter | -                                       | `text/plain; charset=utf-8`                                                 |
 
-Verifies the API token
-
-Requires authorization
-
-Response:
-
-```json
-{ "ok": true }
-```
-
-### `POST /api/pastes`
-
-Creates a paste
-
-Requires authorization
-
-Request body:
-
-```json
-{
-	"content": "console.log('hello')"
-}
-```
-
-Response:
-
-```json
-{
-	"id": "gzC",
-	"file": "gzC.txt",
-	"url": "https://p.example.com/gzC",
-	"rawUrl": "https://p.example.com/gzC/raw",
-	"language": "Plain text",
-	"languageKey": "plaintext",
-	"relevance": 1,
-	"size": 28,
-	"createdAt": "2026-05-27T18:58:42.559Z",
-	"views": 0
-}
-```
-
-### `GET /api/pastes/:id`
-
-Returns a paste and increments its view counter
-
-Public endpoint
-
-Markdown pastes return `renderMode: "markdown"` and `renderedHtml`. Code pastes return `renderMode: "code"` and `highlightedHtml` when the paste size does not exceed `HIGHLIGHT_MAX_SIZE`
-
-### `PATCH /api/pastes/:id`
-
-Renames a paste id, changing its short link
-
-Requires authorization
-
-Request body:
-
-```json
-{
-	"id": "release-notes"
-}
-```
-
-The response contains the updated `id`, `url`, and `rawUrl`
-
-### `DELETE /api/pastes/:id`
-
-Deletes a paste from the index and removes its file from disk
-
-Requires authorization
-
-### `GET /:id`
-
-Opens the HTML paste viewer
-
-Public route
-
-### `GET /:id/raw`
-
-Returns the original paste content as `text/plain; charset=utf-8` and increments the view counter
-
-Public route
+`Paste` includes the paste metadata, `content`, `renderMode`, and rendered fields when they are available. Markdown pastes return `renderMode: "markdown"` with `renderedHtml`. Code pastes return `renderMode: "code"` with `highlightedHtml` when the paste size does not exceed `HIGHLIGHT_MAX_SIZE`.
