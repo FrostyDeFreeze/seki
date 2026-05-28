@@ -28,6 +28,7 @@ const buttons = {
 	copy: document.getElementById('copy-button'),
 	rename: document.getElementById('rename-button'),
 	delete: document.getElementById('delete-button'),
+	github: document.getElementById('github-button'),
 	signOut: document.getElementById('sign-out-button')
 }
 
@@ -105,7 +106,7 @@ function showEditor(content = '') {
 	viewerView.hidden = true
 	editorView.hidden = false
 	metaStrip.hidden = true
-	setToolbar(['save', 'new', 'signOut'])
+	setToolbar(['save', 'new', 'github', 'signOut'])
 	editorInput.value = content
 	editorInput.focus()
 }
@@ -141,13 +142,15 @@ function showNotFound() {
 	currentContent = content
 	document.title = 'Paste not found - Seki'
 	renderCode(content, null, 'plaintext')
-	setToolbar(isAuthenticated ? ['new', 'signOut'] : ['new'])
+	setToolbar(isAuthenticated ? ['new', 'github', 'signOut'] : ['new', 'github'])
 }
 
 function updateViewerToolbar() {
 	const actions = ['new', 'duplicate', 'raw', 'copy']
 	if (isAuthenticated) {
-		actions.push('rename', 'delete', 'signOut')
+		actions.push('rename', 'delete', 'github', 'signOut')
+	} else {
+		actions.push('github')
 	}
 	setToolbar(actions)
 }

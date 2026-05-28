@@ -72,6 +72,7 @@ button {
 }
 
 .auth-panel {
+	position: relative;
 	width: 100%;
 	max-width: 480px;
 	padding: clamp(28px, 5vw, 44px);
@@ -471,6 +472,17 @@ input:focus {
 	stroke-linecap: round;
 	stroke-linejoin: round;
 	fill: none;
+}
+
+.github-link svg {
+	fill: currentColor;
+	stroke: none;
+}
+
+.auth-github-link {
+	position: absolute;
+	top: 16px;
+	right: 16px;
 }
 
 .tool-danger:hover:not(:disabled) {
