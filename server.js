@@ -122,6 +122,8 @@ function resolveDataDir(value) {
 const CONFIG = readConfig()
 const INDEX_FILE = path.join(CONFIG.dataDir, 'index.json')
 const PASTES_DIR = path.join(CONFIG.dataDir, 'pastes')
+const INDEX_HTML_FILE = path.join(__dirname, 'public', 'index.html')
+const OG_IMAGE_PATH = '/assets/img/og.png'
 
 function ensureStorage() {
 	fs.mkdirSync(PASTES_DIR, { recursive: true })
@@ -166,6 +168,20 @@ function loadIndex() {
 	return data
 }
 
+function loadIndexSnapshot() {
+	if (!fs.existsSync(INDEX_FILE)) {
+		return []
+	}
+
+	const rawData = fs.readFileSync(INDEX_FILE, 'utf8')
+	const data = JSON.parse(rawData || '[]')
+	if (!Array.isArray(data)) {
+		throw new Error('data/index.json must contain an array')
+	}
+
+	return data
+}
+
 function saveIndex(data) {
 	fs.mkdirSync(CONFIG.dataDir, { recursive: true })
 
@@ -189,6 +205,89 @@ function pasteUrl(id) {
 
 function rawPasteUrl(id) {
 	return `${CONFIG.baseUrl}/${encodeURIComponent(id)}/raw`
+}
+
+function publicUrl(pathname) {
+	const normalizedPath = pathname.startsWith('/') ? pathname : `/${pathname}`
+	return `${CONFIG.baseUrl}${normalizedPath}`
+}
+
+function rootUrl() {
+	return `${CONFIG.baseUrl}/`
+}
+
+function rootSocialMeta() {
+	return {
+		title: 'Seki',
+		description: 'Private paste service',
+		type: 'website',
+		url: rootUrl(),
+		image: publicUrl(OG_IMAGE_PATH)
+	}
+}
+
+function pasteSocialMeta(entry) {
+	return {
+		title: `${entry.id || 'Paste'} - Seki`,
+		description: `${entry.language || 'Plain text'} · ${formatBytes(entry.size || 0)}`,
+		type: 'article',
+		url: pasteUrl(entry.id),
+		image: publicUrl(OG_IMAGE_PATH)
+	}
+}
+
+function socialMetaForPaste(id) {
+	if (!validPasteId(id)) {
+		return rootSocialMeta()
+	}
+
+	try {
+		const data = loadIndexSnapshot()
+		const entry = findEntry(data, id)
+		return entry ? pasteSocialMeta(entry) : rootSocialMeta()
+	} catch (e) {
+		console.error(`Error reading paste metadata ${id}: ${e.stack || e}`)
+		return rootSocialMeta()
+	}
+}
+
+function renderSocialTags(meta) {
+	const title = escapeAttribute(meta.title)
+	const description = escapeAttribute(meta.description)
+	const type = escapeAttribute(meta.type)
+	const url = escapeAttribute(meta.url)
+	const image = escapeAttribute(meta.image)
+
+	return [
+		`<meta property="og:title" content="${title}" />`,
+		`<meta property="og:description" content="${description}" />`,
+		`<meta property="og:type" content="${type}" />`,
+		`<meta property="og:url" content="${url}" />`,
+		`<meta property="og:image" content="${image}" />`,
+		'<meta property="og:image:width" content="512" />',
+		'<meta property="og:image:height" content="512" />',
+		'<meta name="twitter:card" content="summary" />',
+		`<meta name="twitter:title" content="${title}" />`,
+		`<meta name="twitter:description" content="${description}" />`,
+		`<meta name="twitter:image" content="${image}" />`
+	].join('\n\t\t')
+}
+
+function renderIndexHtml(meta) {
+	const title = escapeHtml(meta.title)
+	const description = escapeAttribute(meta.description)
+	const html = fs.readFileSync(INDEX_HTML_FILE, 'utf8')
+	const withTitle = html.replace(/<title>[\s\S]*?<\/title>/, `<title>${title}</title>`)
+	const withDescription = withTitle.replace(
+		/<meta\s+name="description"\s+content="[^"]*"\s*\/?>/,
+		`<meta name="description" content="${description}" />`
+	)
+
+	return withDescription.replace(/(\s*)<\/head>/, `$1${renderSocialTags(meta)}$1</head>`)
+}
+
+function sendIndex(res, meta) {
+	return res.type('html').send(renderIndexHtml(meta))
 }
 
 function contentDisposition(filename) {
@@ -347,6 +446,17 @@ function formatLanguageName(languageKey) {
 	return language?.name || languageKey
 }
 
+function formatBytes(value) {
+	if (value < 1024) {
+		return `${value} B`
+	}
+	if (value < 1024 * 1024) {
+		return `${(value / 1024).toFixed(1)} KB`
+	}
+
+	return `${(value / (1024 * 1024)).toFixed(2)} MB`
+}
+
 function renderPasteContent(content, languageKey, size) {
 	if (languageKey === 'markdown') {
 		if (CONFIG.highlightMaxSize === 0 || size > CONFIG.highlightMaxSize) {
@@ -476,7 +586,7 @@ app.use((_req, res, next) => {
 	next()
 })
 app.use(express.json({ limit: CONFIG.pasteMaxSize + 16 * 1024 }))
-app.use(express.static(path.join(__dirname, 'public')))
+app.use(express.static(path.join(__dirname, 'public'), { index: false }))
 
 app.post('/auth/verify', requireAuth, (_req, res) => {
 	res.json({ ok: true })
@@ -645,8 +755,12 @@ app.get('/:id/raw', (req, res) => {
 	}
 })
 
-app.get(['/', '/:id'], (_req, res) => {
-	res.sendFile(path.join(__dirname, 'public', 'index.html'))
+app.get('/', (_req, res) => {
+	sendIndex(res, rootSocialMeta())
+})
+
+app.get('/:id', (req, res) => {
+	sendIndex(res, socialMetaForPaste(req.params.id))
 })
 
 app.use((err, _req, res, next) => {
@@ -663,5 +777,5 @@ app.use((err, _req, res, next) => {
 })
 
 app.listen(CONFIG.port, () => {
-	console.log(`Seki is running on http://localhost:${CONFIG.port}`)
+	console.log(`Server is running on http://localhost:${CONFIG.port}`)
 })
