@@ -8,74 +8,56 @@ const hljs = require('highlight.js')
 const MarkdownIt = require('markdown-it')
 
 const app = express()
+const PUBLIC_DIR = path.join(__dirname, 'public')
 const CODE_ALPHABET = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
 const MAX_GENERATION_ATTEMPTS = 1_000
 const LANGUAGE_SAMPLE_SIZE = 64 * 1024
 const CUSTOM_ID_MAX_LENGTH = 80
-const RESERVED_IDS = new Set(['api', 'auth', 'assets', 'raw', 'favicon.ico', 'robots.txt'])
-const LANGUAGE_CANDIDATES = [
-	'javascript',
-	'typescript',
-	'json',
-	'html',
-	'xml',
-	'css',
-	'scss',
-	'bash',
-	'shell',
-	'powershell',
-	'python',
-	'go',
-	'rust',
-	'java',
-	'kotlin',
-	'c',
-	'cpp',
-	'csharp',
-	'php',
-	'ruby',
-	'sql',
-	'yaml',
-	'toml',
-	'ini',
-	'markdown',
-	'dockerfile'
-].filter(language => hljs.getLanguage(language))
-const CODE_LANGUAGE_CANDIDATES = LANGUAGE_CANDIDATES.filter(language => language !== 'markdown')
-
-const markdown = new MarkdownIt({
-	html: false,
-	linkify: true,
-	typographer: false,
-	highlight(code, language) {
-		const languageKey = language?.trim().toLowerCase()
-		if (languageKey && hljs.getLanguage(languageKey)) {
-			return `<pre class="markdown-code"><code class="language-${escapeAttribute(languageKey)}">${
-				hljs.highlight(code, {
-					language: languageKey,
-					ignoreIllegals: true
-				}).value
-			}</code></pre>`
-		}
-
-		return `<pre class="markdown-code"><code>${escapeHtml(code)}</code></pre>`
-	}
-})
+const RESERVED_IDS = new Set(['api', 'auth', 'assets', '404.html'])
+const EXTENSIONS = {
+	bash: 'sh',
+	c: 'c',
+	cpp: 'cpp',
+	csharp: 'cs',
+	css: 'css',
+	dockerfile: 'Dockerfile',
+	go: 'go',
+	html: 'html',
+	ini: 'ini',
+	java: 'java',
+	javascript: 'js',
+	json: 'json',
+	kotlin: 'kt',
+	markdown: 'md',
+	php: 'php',
+	powershell: 'ps1',
+	python: 'py',
+	ruby: 'rb',
+	rust: 'rs',
+	scss: 'scss',
+	shell: 'sh',
+	sql: 'sql',
+	toml: 'toml',
+	typescript: 'ts',
+	xml: 'xml',
+	yaml: 'yaml'
+}
+const CODE_LANGUAGES = Object.keys(EXTENSIONS).filter(language => language !== 'markdown' && hljs.getLanguage(language))
 
 function readConfig() {
 	const port = Number.parseInt(process.env.PORT || '7250', 10)
-	const baseUrl = normalizeBaseUrl(process.env.BASE_URL || `http://localhost:${port}`)
+	const baseUrl = parseUrl(process.env.BASE_URL?.trim())
 	const apiToken = process.env.API_TOKEN?.trim()
-	const pasteCodeLength = Number.parseInt(process.env.PASTE_CODE_LENGTH || '3', 10)
-	const pasteMaxSize = Number.parseInt(process.env.PASTE_MAX_SIZE || '1048576', 10)
+	const codeLength = Number.parseInt(process.env.PASTE_CODE_LENGTH || '3', 10)
+	const maxSize = Number.parseInt(process.env.PASTE_MAX_SIZE || '1048576', 10)
 	const highlightMaxSize = Number.parseInt(process.env.HIGHLIGHT_MAX_SIZE || '262144', 10)
-	const dataDir = resolveDataDir(process.env.DATA_DIR || './data')
+	const dataDir = path.resolve(__dirname, process.env.DATA_DIR || './data')
 
 	if (!Number.isInteger(port) || port < 1 || port > 65535) {
 		throw new Error('PORT must be a valid TCP port')
 	}
 
-	if (!baseUrl) {
+	if (!baseUrl || (baseUrl.protocol !== 'http:' && baseUrl.protocol !== 'https:')) {
 		throw new Error('BASE_URL must be a valid http(s) URL')
 	}
 
@@ -83,224 +65,107 @@ function readConfig() {
 		throw new Error('API_TOKEN is required')
 	}
 
-	if (!Number.isInteger(pasteCodeLength) || pasteCodeLength < 1 || pasteCodeLength > 16) {
+	if (!Number.isInteger(codeLength) || codeLength < 1 || codeLength > 16) {
 		throw new Error('PASTE_CODE_LENGTH must be an integer from 1 to 16')
 	}
 
-	if (!Number.isInteger(pasteMaxSize) || pasteMaxSize < 1 || pasteMaxSize > 50 * 1024 * 1024) {
+	if (!Number.isInteger(maxSize) || maxSize < 1 || maxSize > 50 * 1024 * 1024) {
 		throw new Error('PASTE_MAX_SIZE must be an integer from 1 to 52428800')
 	}
 
-	if (!Number.isInteger(highlightMaxSize) || highlightMaxSize < 0 || highlightMaxSize > pasteMaxSize) {
+	if (!Number.isInteger(highlightMaxSize) || highlightMaxSize < 0 || highlightMaxSize > maxSize) {
 		throw new Error('HIGHLIGHT_MAX_SIZE must be an integer from 0 to PASTE_MAX_SIZE')
 	}
 
-	return { port, baseUrl, apiToken, pasteCodeLength, pasteMaxSize, highlightMaxSize, dataDir }
+	return { port, baseUrl: baseUrl.href.replace(/\/$/, ''), apiToken, codeLength, maxSize, highlightMaxSize, dataDir }
 }
 
-function normalizeBaseUrl(value) {
-	if (typeof value !== 'string') {
-		return null
-	}
-
+function parseUrl(value) {
 	try {
-		const url = new URL(value.trim())
-		if ((url.protocol !== 'http:' && url.protocol !== 'https:') || !url.hostname) {
-			return null
-		}
-
-		return url.href.replace(/\/$/, '')
+		return new URL(value)
 	} catch {
 		return null
 	}
 }
 
-function resolveDataDir(value) {
-	return path.resolve(__dirname, value)
-}
-
 const CONFIG = readConfig()
 const INDEX_FILE = path.join(CONFIG.dataDir, 'index.json')
 const PASTES_DIR = path.join(CONFIG.dataDir, 'pastes')
-const INDEX_HTML_FILE = path.join(__dirname, 'public', 'index.html')
-const OG_IMAGE_PATH = '/assets/img/og.png'
 
-function ensureStorage() {
-	fs.mkdirSync(PASTES_DIR, { recursive: true })
-
-	if (!fs.existsSync(INDEX_FILE)) {
-		saveIndex([])
-	}
+function sha256(value) {
+	return crypto.createHash('sha256').update(value).digest()
 }
 
-function loadIndex() {
-	ensureStorage()
+const API_TOKEN_HASH = sha256(CONFIG.apiToken)
 
-	const rawData = fs.readFileSync(INDEX_FILE, 'utf8')
-	const data = JSON.parse(rawData || '[]')
-	if (!Array.isArray(data)) {
-		throw new Error('data/index.json must contain an array')
-	}
-
-	let changed = false
-	for (const entry of data) {
-		if (entry?.id) {
-			const url = pasteUrl(entry.id)
-			const rawUrl = rawPasteUrl(entry.id)
-			if (entry.url !== url) {
-				entry.url = url
-				changed = true
-			}
-			if (entry.rawUrl !== rawUrl) {
-				entry.rawUrl = rawUrl
-				changed = true
-			}
-		}
-		if (entry && Object.prototype.hasOwnProperty.call(entry, 'filename')) {
-			delete entry.filename
-			changed = true
-		}
-	}
-	if (changed) {
-		saveIndex(data)
-	}
-
-	return data
+function escapeHtml(value) {
+	return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;')
 }
 
-function loadIndexSnapshot() {
+const markdown = new MarkdownIt({
+	linkify: true,
+	highlight(code, language) {
+		const key = language.trim().toLowerCase()
+		const html = hljs.getLanguage(key) ? hljs.highlight(code, { language: key, ignoreIllegals: true }).value : escapeHtml(code)
+		return `<pre><code>${html}</code></pre>`
+	}
+})
+
+const INDEX_HTML = fs.readFileSync(path.join(PUBLIC_DIR, 'index.html'), 'utf8')
+
+function renderIndex(title, description, url) {
+	const values = { TITLE: title, DESCRIPTION: description, URL: url, BASE_URL: CONFIG.baseUrl }
+	return INDEX_HTML.replace(/%(TITLE|DESCRIPTION|URL|BASE_URL)%/g, (_match, key) => escapeHtml(values[key]))
+}
+
+fs.mkdirSync(PASTES_DIR, { recursive: true })
+
+function load() {
 	if (!fs.existsSync(INDEX_FILE)) {
 		return []
 	}
 
-	const rawData = fs.readFileSync(INDEX_FILE, 'utf8')
-	const data = JSON.parse(rawData || '[]')
+	const data = JSON.parse(fs.readFileSync(INDEX_FILE, 'utf8'))
 	if (!Array.isArray(data)) {
-		throw new Error('data/index.json must contain an array')
+		throw new Error('index.json must contain an array')
 	}
 
 	return data
 }
 
-function saveIndex(data) {
-	fs.mkdirSync(CONFIG.dataDir, { recursive: true })
-
-	const tempFile = path.join(path.dirname(INDEX_FILE), `.${path.basename(INDEX_FILE)}.${process.pid}.${Date.now()}.tmp`)
+function save(data) {
+	const tempFile = `${INDEX_FILE}.tmp`
 	fs.writeFileSync(tempFile, `${JSON.stringify(data, null, 2)}\n`)
 	fs.renameSync(tempFile, INDEX_FILE)
 }
 
-function pastePath(file) {
-	const fullPath = path.resolve(PASTES_DIR, file)
-	if (!fullPath.startsWith(`${PASTES_DIR}${path.sep}`)) {
-		throw new Error('Invalid paste file path')
+function readContent(entry) {
+	return fs.readFileSync(path.join(PASTES_DIR, entry.file), 'utf8')
+}
+
+function genUniqueId(data) {
+	const usedIds = new Set(data.map(item => item.id))
+
+	for (let attempt = 0; attempt < MAX_GENERATION_ATTEMPTS; attempt++) {
+		let id = ''
+		for (let i = 0; i < CONFIG.codeLength; i++) {
+			id += CODE_ALPHABET[crypto.randomInt(CODE_ALPHABET.length)]
+		}
+
+		if (!usedIds.has(id) && !RESERVED_IDS.has(id)) {
+			return id
+		}
 	}
 
-	return fullPath
+	throw new Error('Unable to generate a unique paste id')
 }
 
-function pasteUrl(id) {
-	return `${CONFIG.baseUrl}/${encodeURIComponent(id)}`
-}
-
-function rawPasteUrl(id) {
-	return `${CONFIG.baseUrl}/${encodeURIComponent(id)}/raw`
-}
-
-function publicUrl(pathname) {
-	const normalizedPath = pathname.startsWith('/') ? pathname : `/${pathname}`
-	return `${CONFIG.baseUrl}${normalizedPath}`
-}
-
-function rootUrl() {
-	return `${CONFIG.baseUrl}/`
-}
-
-function rootSocialMeta() {
-	return {
-		title: 'Seki',
-		description: 'Private paste service',
-		type: 'website',
-		url: rootUrl(),
-		image: publicUrl(OG_IMAGE_PATH)
-	}
-}
-
-function pasteSocialMeta(entry) {
-	return {
-		title: `${entry.id || 'Paste'} - Seki`,
-		description: `${entry.language || 'Plain text'} · ${formatBytes(entry.size || 0)}`,
-		type: 'article',
-		url: pasteUrl(entry.id),
-		image: publicUrl(OG_IMAGE_PATH)
-	}
-}
-
-function socialMetaForPaste(id) {
-	if (!validPasteId(id)) {
-		return rootSocialMeta()
-	}
-
-	try {
-		const data = loadIndexSnapshot()
-		const entry = findEntry(data, id)
-		return entry ? pasteSocialMeta(entry) : rootSocialMeta()
-	} catch (e) {
-		console.error(`Error reading paste metadata ${id}: ${e.stack || e}`)
-		return rootSocialMeta()
-	}
-}
-
-function renderSocialTags(meta) {
-	const title = escapeAttribute(meta.title)
-	const description = escapeAttribute(meta.description)
-	const type = escapeAttribute(meta.type)
-	const url = escapeAttribute(meta.url)
-	const image = escapeAttribute(meta.image)
-
-	return [
-		`<meta property="og:title" content="${title}" />`,
-		`<meta property="og:description" content="${description}" />`,
-		`<meta property="og:type" content="${type}" />`,
-		`<meta property="og:url" content="${url}" />`,
-		`<meta property="og:image" content="${image}" />`,
-		'<meta property="og:image:width" content="512" />',
-		'<meta property="og:image:height" content="512" />',
-		'<meta name="twitter:card" content="summary" />',
-		`<meta name="twitter:title" content="${title}" />`,
-		`<meta name="twitter:description" content="${description}" />`,
-		`<meta name="twitter:image" content="${image}" />`
-	].join('\n\t\t')
-}
-
-function renderIndexHtml(meta) {
-	const title = escapeHtml(meta.title)
-	const description = escapeAttribute(meta.description)
-	const html = fs.readFileSync(INDEX_HTML_FILE, 'utf8')
-	const withTitle = html.replace(/<title>[\s\S]*?<\/title>/, `<title>${title}</title>`)
-	const withDescription = withTitle.replace(
-		/<meta\s+name="description"\s+content="[^"]*"\s*\/?>/,
-		`<meta name="description" content="${description}" />`
-	)
-
-	return withDescription.replace(/(\s*)<\/head>/, `$1${renderSocialTags(meta)}$1</head>`)
-}
-
-function sendIndex(res, meta) {
-	return res.type('html').send(renderIndexHtml(meta))
-}
-
-function contentDisposition(filename) {
-	const asciiFilename = filename.replace(/[^\x20-\x7e]+/g, '_').replace(/["\\]/g, '_')
-	return `inline; filename="${asciiFilename}"; filename*=UTF-8''${encodeURIComponent(filename)}`
-}
-
-function normalizePasteId(value) {
+function normalizeId(value) {
 	if (typeof value !== 'string') {
 		return null
 	}
 
-	const normalized = value
+	const id = value
 		.trim()
 		.toLowerCase()
 		.normalize('NFKD')
@@ -308,122 +173,24 @@ function normalizePasteId(value) {
 		.replace(/[^a-z0-9_.-]+/g, '-')
 		.replace(/-+/g, '-')
 		.replace(/\.{2,}/g, '.')
-		.replace(/^[-_.]+/, '')
-		.replace(/[-_.]+$/, '')
 		.slice(0, CUSTOM_ID_MAX_LENGTH)
-		.replace(/[-_.]+$/, '')
+		.replace(/^[-_.]+|[-_.]+$/g, '')
 
-	if (!validPasteId(normalized)) {
-		return null
-	}
-
-	return normalized
-}
-
-function isReservedPasteId(id) {
-	return RESERVED_IDS.has(id.toLowerCase())
-}
-
-function downloadFilename(entry) {
-	const id = entry.id || 'paste'
-	if (/\.[a-z0-9]{1,12}$/i.test(id)) {
-		return id
-	}
-
-	return `${id}${extensionForLanguage(entry.languageKey)}`
-}
-
-function extensionForLanguage(languageKey) {
-	const extensions = {
-		bash: '.sh',
-		c: '.c',
-		cpp: '.cpp',
-		csharp: '.cs',
-		css: '.css',
-		dockerfile: '.Dockerfile',
-		go: '.go',
-		html: '.html',
-		ini: '.ini',
-		java: '.java',
-		javascript: '.js',
-		json: '.json',
-		kotlin: '.kt',
-		markdown: '.md',
-		php: '.php',
-		powershell: '.ps1',
-		python: '.py',
-		ruby: '.rb',
-		rust: '.rs',
-		scss: '.scss',
-		shell: '.sh',
-		sql: '.sql',
-		toml: '.toml',
-		typescript: '.ts',
-		xml: '.xml',
-		yaml: '.yaml'
-	}
-
-	return extensions[languageKey] || '.txt'
-}
-
-function genShort() {
-	let short = ''
-	for (let i = 0; i < CONFIG.pasteCodeLength; i++) {
-		short += CODE_ALPHABET.charAt(crypto.randomInt(CODE_ALPHABET.length))
-	}
-
-	return short
-}
-
-function genUniqueShort(data) {
-	const usedCodes = new Set(data.map(item => item.id))
-	const codeSpace = CODE_ALPHABET.length ** CONFIG.pasteCodeLength
-	if (usedCodes.size >= codeSpace) {
-		throw new Error('Paste code space is exhausted')
-	}
-
-	for (let attempt = 0; attempt < MAX_GENERATION_ATTEMPTS; attempt++) {
-		const short = genShort()
-		if (!usedCodes.has(short) && !isReservedPasteId(short)) {
-			return short
-		}
-	}
-
-	throw new Error('Unable to generate a unique paste code')
+	return id && !RESERVED_IDS.has(id) ? id : null
 }
 
 function detectLanguage(content) {
 	const sample = content.slice(0, LANGUAGE_SAMPLE_SIZE)
 	if (isLikelyMarkdown(sample)) {
-		return { language: 'Markdown', languageKey: 'markdown', relevance: 100 }
+		return { language: 'Markdown', languageKey: 'markdown' }
 	}
 
-	const result = hljs.highlightAuto(sample, CODE_LANGUAGE_CANDIDATES)
+	const result = hljs.highlightAuto(sample, CODE_LANGUAGES)
 	if (!result.language || result.relevance < 2) {
-		return { language: 'Plain text', languageKey: 'plaintext', relevance: result.relevance || 0 }
+		return { language: 'Plain text', languageKey: 'plaintext' }
 	}
 
-	return {
-		language: formatLanguageName(result.language),
-		languageKey: result.language,
-		relevance: result.relevance || 0
-	}
-}
-
-function refreshDetectedLanguage(entry, content) {
-	const detected = detectLanguage(content)
-	const changed =
-		entry.language !== detected.language ||
-		entry.languageKey !== detected.languageKey ||
-		entry.relevance !== detected.relevance
-
-	if (changed) {
-		entry.language = detected.language
-		entry.languageKey = detected.languageKey
-		entry.relevance = detected.relevance
-	}
-
-	return changed
+	return { language: hljs.getLanguage(result.language).name, languageKey: result.language }
 }
 
 function isLikelyMarkdown(sample) {
@@ -441,9 +208,18 @@ function isLikelyMarkdown(sample) {
 	return score >= 3
 }
 
-function formatLanguageName(languageKey) {
-	const language = hljs.getLanguage(languageKey)
-	return language?.name || languageKey
+function renderContent(entry, content) {
+	if (entry.size > CONFIG.highlightMaxSize) {
+		return null
+	}
+	if (entry.languageKey === 'markdown') {
+		return markdown.render(content)
+	}
+	if (hljs.getLanguage(entry.languageKey)) {
+		return hljs.highlight(content, { language: entry.languageKey, ignoreIllegals: true }).value
+	}
+
+	return null
 }
 
 function formatBytes(value) {
@@ -457,136 +233,47 @@ function formatBytes(value) {
 	return `${(value / (1024 * 1024)).toFixed(2)} MB`
 }
 
-function renderPasteContent(content, languageKey, size) {
-	if (languageKey === 'markdown') {
-		if (CONFIG.highlightMaxSize === 0 || size > CONFIG.highlightMaxSize) {
-			return { renderMode: 'markdown', highlightedHtml: null, renderedHtml: null }
-		}
-
-		return { renderMode: 'markdown', highlightedHtml: null, renderedHtml: markdown.render(content) }
-	}
-
-	return { renderMode: 'code', highlightedHtml: highlightContent(content, languageKey, size), renderedHtml: null }
+function filename(entry) {
+	return /\.[a-z0-9]{1,12}$/i.test(entry.id) ? entry.id : `${entry.id}.${EXTENSIONS[entry.languageKey] || 'txt'}`
 }
 
-function highlightContent(content, languageKey, size) {
-	if (CONFIG.highlightMaxSize === 0 || size > CONFIG.highlightMaxSize) {
-		return null
-	}
-
-	try {
-		if (languageKey && languageKey !== 'plaintext' && hljs.getLanguage(languageKey)) {
-			return hljs.highlight(content, { language: languageKey, ignoreIllegals: true }).value
-		}
-
-		return escapeHtml(content)
-	} catch {
-		return escapeHtml(content)
-	}
-}
-
-function escapeHtml(value) {
-	return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;')
-}
-
-function escapeAttribute(value) {
-	return escapeHtml(value).replace(/`/g, '&#96;')
-}
-
-function pasteResponse(entry, content, render = {}) {
-	const filename = downloadFilename(entry)
+function pasteJson(entry, content) {
 	return {
 		id: entry.id,
-		filename,
-		url: pasteUrl(entry.id),
-		rawUrl: rawPasteUrl(entry.id),
+		url: `${CONFIG.baseUrl}/${encodeURIComponent(entry.id)}`,
+		rawUrl: `${CONFIG.baseUrl}/${encodeURIComponent(entry.id)}/raw`,
 		language: entry.language,
 		languageKey: entry.languageKey,
 		size: entry.size,
-		createdAt: entry.createdAt,
 		views: entry.views,
-		content,
-		renderMode: render.renderMode || 'code',
-		highlightedHtml: render.highlightedHtml || null,
-		renderedHtml: render.renderedHtml || null
-	}
-}
-
-function publicEntry(entry) {
-	const filename = downloadFilename(entry)
-	return {
-		id: entry.id,
-		filename,
-		url: pasteUrl(entry.id),
-		rawUrl: rawPasteUrl(entry.id),
-		language: entry.language,
-		languageKey: entry.languageKey,
-		size: entry.size,
 		createdAt: entry.createdAt,
-		views: entry.views
+		content,
+		html: renderContent(entry, content)
 	}
-}
-
-function readBearerToken(req) {
-	const header = req.get('authorization') || ''
-	const [scheme, token, extra] = header.trim().split(/\s+/)
-	if (extra || !scheme || !token || scheme.toLowerCase() !== 'bearer') {
-		return null
-	}
-
-	return token
-}
-
-function tokenMatches(token) {
-	if (!token) {
-		return false
-	}
-
-	const provided = Buffer.from(token)
-	const expected = Buffer.from(CONFIG.apiToken)
-
-	return provided.length === expected.length && crypto.timingSafeEqual(provided, expected)
 }
 
 function requireAuth(req, res, next) {
-	if (!tokenMatches(readBearerToken(req))) {
-		return sendError(res, 401, 'unauthorized', 'Unauthorized')
+	const [scheme, token, extra] = (req.get('authorization') || '').trim().split(/\s+/)
+	if (scheme.toLowerCase() !== 'bearer' || !token || extra || !crypto.timingSafeEqual(sha256(token), API_TOKEN_HASH)) {
+		return res.status(401).json({ error: 'Unauthorized' })
 	}
 
 	next()
 }
 
-function sendSuccess(res, data, status = 200) {
-	return res.status(status).json({ success: true, data })
-}
+function findPaste(req, res, next) {
+	req.data = load()
+	req.entry = req.data.find(item => item.id === req.params.id)
+	if (!req.entry) {
+		return res.status(404).json({ error: 'Paste not found' })
+	}
 
-function sendError(res, status, code, message) {
-	return res.status(status).json({ success: false, error: { code, message } })
+	next()
 }
-
-function findEntry(data, id) {
-	return data.find(item => item.id === id) || null
-}
-
-function validPasteId(id) {
-	return (
-		typeof id === 'string' &&
-		id.length <= CUSTOM_ID_MAX_LENGTH &&
-		/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(id) &&
-		!isReservedPasteId(id)
-	)
-}
-
-ensureStorage()
 
 app.disable('x-powered-by')
-app.use((_req, res, next) => {
-	res.setHeader('X-Content-Type-Options', 'nosniff')
-	res.setHeader('Referrer-Policy', 'no-referrer')
-	next()
-})
-app.use(express.json({ limit: CONFIG.pasteMaxSize + 16 * 1024 }))
-app.use(express.static(path.join(__dirname, 'public'), { index: false }))
+app.use(express.json({ limit: CONFIG.maxSize * 2 }))
+app.use(express.static(PUBLIC_DIR, { index: false }))
 
 app.post('/auth/verify', requireAuth, (_req, res) => {
 	res.json({ ok: true })
@@ -594,186 +281,107 @@ app.post('/auth/verify', requireAuth, (_req, res) => {
 
 app.post('/api/pastes', requireAuth, (req, res) => {
 	const content = req.body?.content
-	if (typeof content !== 'string' || content.trim() === '') {
-		return sendError(res, 400, 'bad_request', 'Paste content is required')
+	if (typeof content !== 'string' || !content.trim()) {
+		return res.status(400).json({ error: 'Paste is empty' })
 	}
 
-	const size = Buffer.byteLength(content, 'utf8')
-	if (size > CONFIG.pasteMaxSize) {
-		return sendError(res, 413, 'payload_too_large', `Paste content must be ${CONFIG.pasteMaxSize} bytes or less`)
+	const size = Buffer.byteLength(content)
+	if (size > CONFIG.maxSize) {
+		return res.status(413).json({ error: `Paste must be ${formatBytes(CONFIG.maxSize)} or less` })
 	}
 
-	try {
-		const data = loadIndex()
-		const id = genUniqueShort(data)
-		const file = `${id}.txt`
-		const { language, languageKey, relevance } = detectLanguage(content)
-		const entry = {
-			id,
-			file,
-			url: pasteUrl(id),
-			rawUrl: rawPasteUrl(id),
-			language,
-			languageKey,
-			relevance,
-			size,
-			createdAt: new Date().toISOString(),
-			views: 0
-		}
+	const data = load()
+	const entry = { id: genUniqueId(data), file: `${crypto.randomUUID()}.txt`, ...detectLanguage(content), size, views: 0 }
+	entry.createdAt = new Date().toISOString()
 
-		fs.writeFileSync(pastePath(file), content)
-		data.push(entry)
-		saveIndex(data)
+	fs.writeFileSync(path.join(PASTES_DIR, entry.file), content)
+	data.push(entry)
+	save(data)
 
-		const render = renderPasteContent(content, languageKey, size)
-		return sendSuccess(res, pasteResponse(entry, content, render), 201)
-	} catch (e) {
-		console.error(`Error creating paste: ${e.stack || e}`)
-		return sendError(res, 500, 'internal_server_error', 'Unable to create paste right now')
-	}
+	res.status(201).json(pasteJson(entry, content))
 })
 
-app.get('/api/pastes/:id', (req, res) => {
-	const id = req.params.id
-	if (!validPasteId(id)) {
-		return sendError(res, 404, 'not_found', 'Paste not found')
-	}
+app.get('/api/pastes/:id', findPaste, (req, res) => {
+	const content = readContent(req.entry)
+	req.entry.views += 1
+	save(req.data)
 
-	try {
-		const data = loadIndex()
-		const entry = findEntry(data, id)
-		if (!entry) {
-			return sendError(res, 404, 'not_found', 'Paste not found')
-		}
-
-		const content = fs.readFileSync(pastePath(entry.file), 'utf8')
-		entry.views += 1
-		refreshDetectedLanguage(entry, content)
-		saveIndex(data)
-
-		const render = renderPasteContent(content, entry.languageKey, entry.size)
-		return sendSuccess(res, pasteResponse(entry, content, render))
-	} catch (e) {
-		console.error(`Error reading paste ${id}: ${e.stack || e}`)
-		return sendError(res, 500, 'internal_server_error', 'Unable to read paste right now')
-	}
+	res.json(pasteJson(req.entry, content))
 })
 
-app.patch('/api/pastes/:id', requireAuth, (req, res) => {
-	const id = req.params.id
-	if (!validPasteId(id)) {
-		return sendError(res, 404, 'not_found', 'Paste not found')
+app.patch('/api/pastes/:id', requireAuth, findPaste, (req, res) => {
+	const id = normalizeId(req.body?.id)
+	if (!id) {
+		return res.status(400).json({ error: 'Use letters, numbers, dots, dashes or underscores' })
+	}
+	if (id !== req.entry.id && req.data.some(item => item.id === id)) {
+		return res.status(409).json({ error: 'This name is taken' })
 	}
 
-	try {
-		const data = loadIndex()
-		const entry = findEntry(data, id)
-		if (!entry) {
-			return sendError(res, 404, 'not_found', 'Paste not found')
-		}
-
-		const nextId = normalizePasteId(req.body?.id ?? req.body?.name ?? req.body?.filename)
-		if (!nextId) {
-			return sendError(res, 400, 'bad_request', 'Paste id must contain letters, numbers, dots, dashes or underscores')
-		}
-
-		if (nextId !== entry.id && data.some(item => item.id === nextId)) {
-			return sendError(res, 409, 'conflict', 'Paste id is already in use')
-		}
-
-		entry.id = nextId
-		entry.url = pasteUrl(entry.id)
-		entry.rawUrl = rawPasteUrl(entry.id)
-		delete entry.filename
-		saveIndex(data)
-
-		const content = fs.readFileSync(pastePath(entry.file), 'utf8')
-		const render = renderPasteContent(content, entry.languageKey, entry.size)
-		return sendSuccess(res, pasteResponse(entry, content, render))
-	} catch (e) {
-		console.error(`Error renaming paste ${id}: ${e.stack || e}`)
-		return sendError(res, 500, 'internal_server_error', 'Unable to rename paste right now')
+	const languageKey = Object.keys(EXTENSIONS).find(key => id.endsWith(`.${EXTENSIONS[key].toLowerCase()}`))
+	if (languageKey && hljs.getLanguage(languageKey)) {
+		req.entry.languageKey = languageKey
+		req.entry.language = hljs.getLanguage(languageKey).name
 	}
+
+	req.entry.id = id
+	save(req.data)
+
+	res.json(pasteJson(req.entry, readContent(req.entry)))
 })
 
-app.delete('/api/pastes/:id', requireAuth, (req, res) => {
-	const id = req.params.id
-	if (!validPasteId(id)) {
-		return sendError(res, 404, 'not_found', 'Paste not found')
-	}
+app.delete('/api/pastes/:id', requireAuth, findPaste, (req, res) => {
+	req.data.splice(req.data.indexOf(req.entry), 1)
+	save(req.data)
+	fs.rmSync(path.join(PASTES_DIR, req.entry.file), { force: true })
 
-	try {
-		const data = loadIndex()
-		const index = data.findIndex(item => item.id === id)
-		if (index === -1) {
-			return sendError(res, 404, 'not_found', 'Paste not found')
-		}
-
-		const [entry] = data.splice(index, 1)
-		const filePath = pastePath(entry.file)
-		if (fs.existsSync(filePath)) {
-			fs.unlinkSync(filePath)
-		}
-		saveIndex(data)
-
-		return sendSuccess(res, publicEntry(entry))
-	} catch (e) {
-		console.error(`Error deleting paste ${id}: ${e.stack || e}`)
-		return sendError(res, 500, 'internal_server_error', 'Unable to delete paste right now')
-	}
-})
-
-app.get('/:id/raw', (req, res) => {
-	const id = req.params.id
-	if (!validPasteId(id)) {
-		return res.status(404).type('text/plain; charset=utf-8').send('Paste not found')
-	}
-
-	try {
-		const data = loadIndex()
-		const entry = findEntry(data, id)
-		if (!entry) {
-			return res.status(404).type('text/plain; charset=utf-8').send('Paste not found')
-		}
-
-		const filePath = pastePath(entry.file)
-		const content = fs.readFileSync(filePath, 'utf8')
-		entry.views += 1
-		refreshDetectedLanguage(entry, content)
-		saveIndex(data)
-
-		return res.sendFile(filePath, {
-			headers: {
-				'Content-Type': 'text/plain; charset=utf-8',
-				'Content-Disposition': contentDisposition(downloadFilename(entry)),
-				'Cache-Control': 'no-store'
-			}
-		})
-	} catch (e) {
-		console.error(`Error reading raw paste ${id}: ${e.stack || e}`)
-		return res.status(500).type('text/plain; charset=utf-8').send('Unable to read paste right now')
-	}
+	res.json({ id: req.entry.id })
 })
 
 app.get('/', (_req, res) => {
-	sendIndex(res, rootSocialMeta())
+	res.type('html').send(renderIndex('Seki', 'Private paste service', `${CONFIG.baseUrl}/`))
 })
 
 app.get('/:id', (req, res) => {
-	sendIndex(res, socialMetaForPaste(req.params.id))
+	const entry = load().find(item => item.id === req.params.id)
+	if (!entry) {
+		return res.status(404).sendFile(path.join(PUBLIC_DIR, '404.html'))
+	}
+
+	const url = `${CONFIG.baseUrl}/${encodeURIComponent(entry.id)}`
+	res.type('html').send(renderIndex(`${entry.id} - Seki`, `${entry.language} · ${formatBytes(entry.size)}`, url))
 })
 
-app.use((err, _req, res, next) => {
-	if (!err) {
-		return next()
+app.get('/:id/raw', (req, res) => {
+	const data = load()
+	const entry = data.find(item => item.id === req.params.id)
+	if (!entry) {
+		return res.status(404).type('text').send('Paste not found')
 	}
 
-	if (err.type === 'entity.too.large') {
-		return sendError(res, 413, 'payload_too_large', `Request body must be ${CONFIG.pasteMaxSize} bytes or less`)
+	entry.views += 1
+	save(data)
+
+	const name = filename(entry)
+	res.sendFile(path.join(PASTES_DIR, entry.file), {
+		headers: {
+			'Content-Type': 'text/plain; charset=utf-8',
+			'Content-Disposition': `inline; filename="${name.replace(/[^\x20-\x7e]|["\\]/g, '_')}"; filename*=UTF-8''${encodeURIComponent(name)}`,
+			'Cache-Control': 'no-store'
+		}
+	})
+})
+
+app.use((err, req, res, _next) => {
+	console.error(err)
+
+	const error = err.expose ? err.message : 'Something went wrong'
+	res.status(err.status || 500)
+	if (req.method === 'GET' && !req.path.startsWith('/api/')) {
+		return res.type('text').send(error)
 	}
 
-	console.error(`Unhandled request error: ${err.stack || err}`)
-	return sendError(res, 500, 'internal_server_error', 'Unexpected server error')
+	res.json({ error })
 })
 
 app.listen(CONFIG.port, () => {
